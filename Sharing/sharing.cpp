@@ -89,8 +89,14 @@ VOID Fini(INT32 code, VOID *v) {
 
         // Check if still in same block
         if(sameblock) {
+            std::set<int>::iterator sit;
             // If a thread has accessed this word
-            if(!tracker[*it].empty()) touched_this_block.insert(*tracker[*it].begin());
+            if(!tracker[*it].empty()) {
+                for(sit=tracker[*it].begin(); sit!=tracker[*it].end(); sit++) {
+                    printf("%d\n", *sit);
+                    touched_this_block.insert(*sit);
+                }
+            }
         }
 
         // New block
@@ -105,8 +111,7 @@ VOID Fini(INT32 code, VOID *v) {
 
 }
 
-INT32 Usage()
-{
+INT32 Usage(){
     PIN_ERROR("This Pintool prints list of falsely-shared cache blocks\n"
               + KNOB_BASE::StringKnobSummary() + "\n");
     return -1;
