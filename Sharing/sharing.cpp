@@ -69,18 +69,25 @@ VOID Trace(TRACE trace, VOID *v) {
 }
 
 VOID Fini(INT32 code, VOID *v) {
-    std::vector<uintptr_t>::iterator it;
     printf("Fini!\n");
     printf("addrs size: %d\n", (int)addrs.size());
+    std::vector<uintptr_t>::iterator addr;
     std::sort(addrs.begin(), addrs.end());
 
-    int truesh_detected = 0, falsesh = 0;
-    unsigned long currblock = 0;
-    std::set<int> touched_this_block;
+    std::vector<uintptr_t> blocks = std::vector<uintptr_t>();
+    int /*truesh_detected = 0,*/ falsesh = 0;
+    //unsigned long currblock = 0;
+    std::set<uintptr_t> touched_this_block;
+
+    std::map< uintptr_t, std::set<int> > block_touched_by;
+    std::map< uintptr_t, int > block_true_shared;
 
     // Iterate through addresses
-    for(it=addrs.begin(); it!=addrs.end(); it++) {
+    for(addr=addrs.begin(); addr!=addrs.end(); addr++) {
+    /*
+        // Get previous block
         unsigned long prevblock = currblock;
+        // Get current block
         currblock = *it/WORDS_PER_BLOCK;
         int sameblock = (prevblock==currblock);
         //printf("BLOCK %lu, %d\n", *it, (int)tracker[*it].size());
@@ -107,7 +114,26 @@ VOID Fini(INT32 code, VOID *v) {
             touched_this_block.clear();
             truesh_detected = 0;
         }
+    */
+        uintptr_t block = *addr/16;
+        if(std::find(blocks.begin(), blocks.end(), block)==blocks.end()) blocks.push_back(block);
+        // Initialize stuff
+        if(block_true_shared.find(block)==block_true_shared.end()) block_true_shared[block] = 0;
+        if(block_touched_by.find(block)==block_touched_by.end()) block_touched_by[block] = std::set<int>();
+
+        // If block is truely shared
+        if((int)tracker[*addr].size()>1) block_true_shared[block] = 1;
+        std::set<int>::iterator sit;
+
+        // Iterate through threads that accessed this word
+        // Add them to the threads which touched this block
+        for(sit=tracker[*addr].begin(); sit!=tracker[*addr].end(); sit++) block_touched_by[block].insert(*sit);
     }
+    std::vector<uintptr_t>::iterator bit;
+    for(bit=blocks.begin();bit!=blocks.end();bit++) {
+        if(!block_true_shared[*bit] && block_touched_by[*bit].size()>1) falsesh++;
+    }
+
     printf("Falsely Shared: %d\n",falsesh);
 
 }
