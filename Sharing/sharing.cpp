@@ -7,15 +7,15 @@
 #include <stdint.h>
 
 #define MAX_THREAD_ID   32
-#define BLOCK_MASK      ~((unsigned long)63)
-#define WORD_MASK       60
-#define WORDS_PER_BLOCK 16
+#define BLOCK_MASK      ~((uintptr_t)63)
+#define WORD_MASK       (uintptr_t)60
+#define WORDS_PER_BLOCK (uintptr_t)16
 
 
 KNOB<string> KnobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "sharing.out", "file name for falsely-shared cache block list");
 
-std::map< uintptr_t,std::set<int> > tracker;
 PIN_MUTEX* addr_m = new PIN_MUTEX;
+std::map< uintptr_t,std::set<int> > tracker;
 std::vector<uintptr_t> addrs = std::vector<uintptr_t>();
 
 // This analysis routine is called on every memory reference.
@@ -24,12 +24,12 @@ VOID MemRef(THREADID tid, VOID* addr) {
     VOID* word  = (void*)(((uintptr_t)addr &  WORD_MASK)>>2);
     uintptr_t tracker_addr = ((uintptr_t)block<<4)|((uintptr_t)word);
     PIN_MutexLock(addr_m);
-    addrs.push_back(tracker_addr);
-    PIN_MutexUnlock(addr_m);
-
+    /*if(std::find(addrs.begin(),addrs.end(),tracker_addr) == addrs.end())*/
     // If this address hasn't been touched yet
-    PIN_MutexLock(addr_m);
-    if(tracker.find(tracker_addr)==tracker.end()) tracker[tracker_addr] = std::set<int>();
+    if(tracker.find(tracker_addr)==tracker.end()){
+        tracker[tracker_addr] = std::set<int>();
+        addrs.push_back(tracker_addr);
+    }
     tracker[tracker_addr].insert(tid);
     PIN_MutexUnlock(addr_m);
 }
@@ -78,11 +78,12 @@ VOID Fini(INT32 code, VOID *v) {
     unsigned long currblock = 0;
     std::set<int> touched_this_block;
 
-    // Iterate through 2^(32)
+    // Iterate through addresses
     for(it=addrs.begin(); it!=addrs.end(); it++) {
         unsigned long prevblock = currblock;
-        currblock = *it/16;
+        currblock = *it/WORDS_PER_BLOCK;
         int sameblock = (prevblock==currblock);
+        //printf("BLOCK %lu, %d\n", *it, (int)tracker[*it].size());
 
         // True sharing detection, always runs
         if((int)tracker[*it].size()>1) truesh_detected = 1;
@@ -91,9 +92,8 @@ VOID Fini(INT32 code, VOID *v) {
         if(sameblock) {
             std::set<int>::iterator sit;
             // If a thread has accessed this word
-            if(!tracker[*it].empty()) {
+            if(!tracker[*it].empty() && (int)tracker[*it].size()==1) {
                 for(sit=tracker[*it].begin(); sit!=tracker[*it].end(); sit++) {
-                    printf("%d\n", *sit);
                     touched_this_block.insert(*sit);
                 }
             }
@@ -101,7 +101,8 @@ VOID Fini(INT32 code, VOID *v) {
 
         // New block
         else {
-            //printf("%lu\n",currblock);
+            //printf("BLOCK %lu, %d, %d\n", *it, (int)touched_this_block.size(), truesh_detected);
+            //printf("%d\n",(int)touched_this_block.size());
             if(touched_this_block.size() > 1 && !truesh_detected) falsesh++;
             touched_this_block.clear();
             truesh_detected = 0;
