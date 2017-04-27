@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <assert.h>
 #include <iostream>
 #include <map>
 #include "pin.H"
@@ -7,24 +8,26 @@
 #include <stdint.h>
 
 #define MAX_THREAD_ID   32
-#define BLOCK_MASK      ~((uintptr_t)63)
-#define WORD_MASK       (uintptr_t)60
-#define WORDS_PER_BLOCK (uintptr_t)16
+#define BLOCK_MASK      ~((long long)63)
+#define WORD_MASK       (long long)60
+#define WORDS_PER_BLOCK (long long)16
 
 
 KNOB<string> KnobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "sharing.out", "file name for falsely-shared cache block list");
 
-PIN_MUTEX* addr_m = new PIN_MUTEX;
-std::map< uintptr_t,std::set<int> > tracker;
-std::vector<uintptr_t> addrs = std::vector<uintptr_t>();
+PIN_MUTEX*                              addr_m = new PIN_MUTEX;
+std::map< long long,std::set<int> >     tracker;
+std::vector<long long>                  addrs = std::vector<long long>();
 
 // This analysis routine is called on every memory reference.
 VOID MemRef(THREADID tid, VOID* addr) {
-    VOID* block = (void*)(((uintptr_t)addr & BLOCK_MASK)>>6);
-    VOID* word  = (void*)(((uintptr_t)addr &  WORD_MASK)>>2);
-    uintptr_t tracker_addr = ((uintptr_t)block<<4)|((uintptr_t)word);
+    VOID* block = (void*)(((long long)addr)>>6);
+    VOID* word  = (void*)(((long long)addr &  WORD_MASK)>>2);
+    long long tracker_addr = ((long long)block<<4)|((long long)word);
+    assert(((long long)word)==((((long long)addr)>>2)&15));
+    assert(tracker_addr==((long long)addr)>>2);
+
     PIN_MutexLock(addr_m);
-    /*if(std::find(addrs.begin(),addrs.end(),tracker_addr) == addrs.end())*/
     // If this address hasn't been touched yet
     if(tracker.find(tracker_addr)==tracker.end()){
         tracker[tracker_addr] = std::set<int>();
@@ -69,72 +72,49 @@ VOID Trace(TRACE trace, VOID *v) {
 }
 
 VOID Fini(INT32 code, VOID *v) {
-    printf("Fini!\n");
-    printf("addrs size: %d\n", (int)addrs.size());
-    std::vector<uintptr_t>::iterator addr;
+    printf("addrs size:\t%d\n", (int)addrs.size());
+
+    int                                     falsesh = 0;
+    std::vector<long long>                  blocks = std::vector<long long>();
+    std::set<long long>                     touched_this_block;
+    std::map<long long, std::set<int> >     block_touched_by;
+    std::map<long long, int >               block_true_shared;
+    std::vector<long long>::iterator        addr;
+    std::set<int>::iterator                 thread_it;
+    std::vector<long long>::iterator        block_it;
+
     std::sort(addrs.begin(), addrs.end());
-
-    std::vector<uintptr_t> blocks = std::vector<uintptr_t>();
-    int /*truesh_detected = 0,*/ falsesh = 0;
-    //unsigned long currblock = 0;
-    std::set<uintptr_t> touched_this_block;
-
-    std::map< uintptr_t, std::set<int> > block_touched_by;
-    std::map< uintptr_t, int > block_true_shared;
 
     // Iterate through addresses
     for(addr=addrs.begin(); addr!=addrs.end(); addr++) {
-    /*
-        // Get previous block
-        unsigned long prevblock = currblock;
-        // Get current block
-        currblock = *it/WORDS_PER_BLOCK;
-        int sameblock = (prevblock==currblock);
-        //printf("BLOCK %lu, %d\n", *it, (int)tracker[*it].size());
+        long long block = (*addr)>>4;
 
-        // True sharing detection, always runs
-        if((int)tracker[*it].size()>1) truesh_detected = 1;
-
-        // Check if still in same block
-        if(sameblock) {
-            std::set<int>::iterator sit;
-            // If a thread has accessed this word
-            if(!tracker[*it].empty() && (int)tracker[*it].size()==1) {
-                for(sit=tracker[*it].begin(); sit!=tracker[*it].end(); sit++) {
-                    touched_this_block.insert(*sit);
-                }
-            }
-        }
-
-        // New block
-        else {
-            //printf("BLOCK %lu, %d, %d\n", *it, (int)touched_this_block.size(), truesh_detected);
-            //printf("%d\n",(int)touched_this_block.size());
-            if(touched_this_block.size() > 1 && !truesh_detected) falsesh++;
-            touched_this_block.clear();
-            truesh_detected = 0;
-        }
-    */
-        uintptr_t block = *addr/16;
-        if(std::find(blocks.begin(), blocks.end(), block)==blocks.end()) blocks.push_back(block);
+        // If we do not have this block number stored
         // Initialize stuff
-        if(block_true_shared.find(block)==block_true_shared.end()) block_true_shared[block] = 0;
-        if(block_touched_by.find(block)==block_touched_by.end()) block_touched_by[block] = std::set<int>();
+        if(std::find(blocks.begin(), blocks.end(), block)==blocks.end()){
+            blocks.push_back(block);
+            block_true_shared[block] = 0;
+            block_touched_by[block] = std::set<int>();
+        }
 
-        // If block is truely shared
+        // If block is truely shared, mark it truly shared
         if((int)tracker[*addr].size()>1) block_true_shared[block] = 1;
-        std::set<int>::iterator sit;
 
         // Iterate through threads that accessed this word
         // Add them to the threads which touched this block
-        for(sit=tracker[*addr].begin(); sit!=tracker[*addr].end(); sit++) block_touched_by[block].insert(*sit);
-    }
-    std::vector<uintptr_t>::iterator bit;
-    for(bit=blocks.begin();bit!=blocks.end();bit++) {
-        if(!block_true_shared[*bit] && block_touched_by[*bit].size()>1) falsesh++;
+        for(thread_it=tracker[*addr].begin(); thread_it!=tracker[*addr].end(); thread_it++) block_touched_by[block].insert(*thread_it);
     }
 
-    printf("Falsely Shared: %d\n",falsesh);
+    // Iterate through blocks
+    for(block_it=blocks.begin();block_it!=blocks.end();block_it++) {
+        if(!block_true_shared[*block_it]){
+            printf("Block: %p\n", (void*)(*block_it));
+            for(thread_it=block_touched_by[*block_it].begin(); thread_it!=block_touched_by[*block_it].end(); thread_it++) printf("\tThread: %d\n",*thread_it);
+        }
+        if(block_true_shared[*block_it]==0 && block_touched_by[*block_it].size()>1) falsesh++;
+    }
+    printf("blocks size:\t%d\n", (int)blocks.size());
+    printf("falsely shared:\t%d\n",falsesh);
 
 }
 
