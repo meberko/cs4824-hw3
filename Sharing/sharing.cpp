@@ -23,11 +23,12 @@ std::vector<long long>                  blocks = std::vector<long long>();
 
 // This analysis routine is called on every memory reference.
 VOID MemRef(THREADID tid, VOID* addr) {
-    long long block = ((long long)addr)>>6;
-    long long word  = ((long long)addr &  WORD_MASK)>>2;
-    long long tracker_addr = (block<<4)|(word);
-    assert(word==((((long long)addr)>>2)&15));
-    assert(tracker_addr==((long long)addr)>>2);
+    long long laddr = (long long)addr;
+    long long block = (laddr)>>6;
+    long long word  = (laddr &  WORD_MASK)>>2;
+    //long long tracker_addr = laddr>>2;
+    assert(word==(((laddr)>>2)&15));
+    assert(word<WORDS_PER_BLOCK);
 
     PIN_MutexLock(addr_m);
     // Check if block number has ever appeared before
@@ -109,7 +110,10 @@ VOID Fini(INT32 code, VOID *v) {
                 if((bit_strs[i] & bit_strs[j]) != 0) truly_shared = 1;
             }
         }
-        if(n_threads > 1 && !truly_shared) falsely_shared++;
+        if(n_threads > 1 && !truly_shared){
+            falsely_shared++;
+            printf("%p\n", (void*)*block_it);
+        }
     }
 /*
     int                                     falsesh = 0;
