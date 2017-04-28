@@ -17,23 +17,33 @@ KNOB<string> KnobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "sharing.out", 
 
 PIN_MUTEX*                              addr_m = new PIN_MUTEX;
 std::map< long long,std::set<int> >     tracker;
+std::map< long long, int >              bit_tracker[MAX_THREAD_ID];
 std::vector<long long>                  addrs = std::vector<long long>();
+std::vector<long long>                  blocks = std::vector<long long>();
 
 // This analysis routine is called on every memory reference.
 VOID MemRef(THREADID tid, VOID* addr) {
-    VOID* block = (void*)(((long long)addr)>>6);
-    VOID* word  = (void*)(((long long)addr &  WORD_MASK)>>2);
-    long long tracker_addr = ((long long)block<<4)|((long long)word);
-    assert(((long long)word)==((((long long)addr)>>2)&15));
+    long long block = ((long long)addr)>>6;
+    long long word  = ((long long)addr &  WORD_MASK)>>2;
+    long long tracker_addr = (block<<4)|(word);
+    assert(word==((((long long)addr)>>2)&15));
     assert(tracker_addr==((long long)addr)>>2);
 
     PIN_MutexLock(addr_m);
+    // Check if block number has ever appeared before
+    if(std::find(blocks.begin(), blocks.end(), block)==blocks.end()) blocks.push_back(block);
+    // Check if this thread has touched this block before
+    if(bit_tracker[tid].find(block)==bit_tracker[tid].end()) bit_tracker[tid][block] = 0;
+    // Mark block bit string
+    bit_tracker[tid][block] = bit_tracker[tid][block] | (1 << word);
+/*
     // If this address hasn't been touched yet
     if(tracker.find(tracker_addr)==tracker.end()){
         tracker[tracker_addr] = std::set<int>();
         addrs.push_back(tracker_addr);
     }
     tracker[tracker_addr].insert(tid);
+*/
     PIN_MutexUnlock(addr_m);
 }
 
@@ -72,10 +82,37 @@ VOID Trace(TRACE trace, VOID *v) {
 }
 
 VOID Fini(INT32 code, VOID *v) {
-    printf("addrs size:\t%d\n", (int)addrs.size());
-
+    int falsely_shared = 0, truly_shared = 0, n_threads = 0;
+    std::vector<long long>::iterator     block_it;
+    // Iterate through blocks
+    for(block_it=blocks.begin(); block_it!=blocks.end(); block_it++) {
+        int t;
+        std::vector<int> bit_strs = std::vector<int>();
+        // Reset n_threads and truly shared
+        n_threads = 0;
+        truly_shared = 0;
+        // For all possible thread ids
+        for(t=0; t<MAX_THREAD_ID; t++) {
+            // If this thread accessed this block
+            if (bit_tracker[t].find(*block_it)!=bit_tracker[t].end()) {
+                // Add to n_threads to keep track of n_threads touching block
+                n_threads++;
+                // Keep a vector of all bit strings we got
+                bit_strs.push_back(bit_tracker[t][*block_it]);
+            }
+        }
+        // Now we have a vector of bit strings. We have to go through and make
+        // sure that none of them have the same bits set.
+        int i,j;
+        for(i=0; i<(int)bit_strs.size(); i++) {
+            for(j=i+1; j<(int)bit_strs.size(); j++) {
+                if((bit_strs[i] & bit_strs[j]) != 0) truly_shared = 1;
+            }
+        }
+        if(n_threads > 1 && !truly_shared) falsely_shared++;
+    }
+/*
     int                                     falsesh = 0;
-    std::vector<long long>                  blocks = std::vector<long long>();
     std::set<long long>                     touched_this_block;
     std::map<long long, std::set<int> >     block_touched_by;
     std::map<long long, int >               block_true_shared;
@@ -113,8 +150,9 @@ VOID Fini(INT32 code, VOID *v) {
         }
         if(block_true_shared[*block_it]==0 && block_touched_by[*block_it].size()>1) falsesh++;
     }
+*/
     printf("blocks size:\t%d\n", (int)blocks.size());
-    printf("falsely shared:\t%d\n",falsesh);
+    printf("falsely shared:\t%d\n",falsely_shared);
 
 }
 
